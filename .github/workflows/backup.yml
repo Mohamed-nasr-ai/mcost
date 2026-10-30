@@ -1,0 +1,50 @@
+name: Weekly DB backup (encrypted)
+
+on:
+  schedule:
+    - cron: "40 2 * * 0"   # كل أحد 2:40 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install PostgreSQL 17 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsS -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Dump public schema and encrypt
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASS: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          F="backup-$(date -u +%Y-%m-%d)"
+          /usr/lib/postgresql/17/bin/pg_dump "$DB_URL" \
+            --schema=public --no-owner --no-privileges -f "$F.sql"
+          # حماية من نسخة فاضية
+          test "$(wc -c < "$F.sql")" -gt 2000
+          grep -q "public.companies" "$F.sql"
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$PASS" --symmetric --cipher-algo AES256 \
+            -o "$F.sql.gpg" "$F.sql"
+          rm "$F.sql"
+          echo "FILE=$F.sql.gpg" >> "$GITHUB_ENV"
+
+      - name: Upload encrypted backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup
+          path: ${{ env.FILE }}
+          retention-days: 60
+          if-no-files-found: error
