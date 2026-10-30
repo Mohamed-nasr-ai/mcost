@@ -1,0 +1,31 @@
+name: Supabase keepalive
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # كل يوم 3:17 UTC
+  workflow_dispatch:        # تشغيل يدوي للتجربة
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Real DB query via get_company
+        env:
+          SB_URL: ${{ secrets.SUPABASE_URL }}
+          SB_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+          SLUG: ${{ secrets.KEEPALIVE_SLUG }}
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS --fail \
+            --retry 5 --retry-delay 20 --retry-all-errors --max-time 30 \
+            -X POST "$SB_URL/rest/v1/rpc/get_company" \
+            -H "apikey: $SB_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"p_slug\":\"$SLUG\"}")
+          # نتأكد إن الرد حقيقي من الداتابيز (من غير ما نطبع البيانات في اللوج)
+          echo "$resp" | grep -q '"active"' || { echo "Unexpected response"; exit 1; }
+          echo "OK: database responded"
